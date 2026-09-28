@@ -1,20 +1,20 @@
-# SPDX-FileCopyrightText: 2026 Your Name <your.email@example.com>
+# SPDX-FileCopyrightText: 2026 Yang Zhang <zhangy2256@mail2.sysu.edu.cn>
 # SPDX-License-Identifier: MIT
 
 """IntentBridgeClarifier.
 
 Registration stub. The competition algorithm is under development.
 
-Team: IntentBridge
-Team Members: Member One, Member Two
-Main Contact: your.email@example.com
+Team: lip
+Team Members: Yang Zhang (Sun Yat-sen University)
+Main Contact: Yang Zhang <zhangy2256@mail2.sysu.edu.cn>
 """
 
 from clarify.baselines import ClarificationAlgorithmBase
 
 
 class IntentBridgeClarifier(ClarificationAlgorithmBase):
-    """Placeholder for the team's competition implementation."""
+    """Placeholder for team lip's competition implementation."""
 
     DEFAULT_CONFIG = {}
 
