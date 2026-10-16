@@ -104,7 +104,7 @@ class _TaskRun:
                         + " in a python fence.",
                     },
                 ]
-        return text
+        return self.safe_fallback(problem)
 
     def robust_synthesis(self, env, problem):
         proposal = json_object(
@@ -147,6 +147,11 @@ class _TaskRun:
         self.record(status="applied", route="conflict_question", formal_compatibility_proved=False)
         return self.solve(env, problem, question, answer)
 
+    def safe_fallback(self, problem):
+        return self.last_code or (
+            "def " + problem["entry_point"] + "(*args, **kwargs):\n    raise NotImplementedError"
+        )
+
     def execute(self, env, problem):
         self.trace = []
         self.qa = ("", "")
@@ -166,11 +171,7 @@ class _TaskRun:
             try:
                 return self.fallback(env, problem)
             except LimitsExceededException:
-                return self.last_code or (
-                    "def "
-                    + problem["entry_point"]
-                    + "(*args, **kwargs):\n    raise NotImplementedError"
-                )
+                return self.safe_fallback(problem)
 
 
 class IntentBridgeClarifier(ClarificationAlgorithmBase):
@@ -180,6 +181,9 @@ class IntentBridgeClarifier(ClarificationAlgorithmBase):
     }
 
     def run(self, env, problem) -> str:
+        repair_attempts = self.config["repair_attempts"]
+        if type(repair_attempts) is not int or repair_attempts < 0:
+            raise ValueError("repair_attempts must be a non-negative integer")
         # The harness may reuse the algorithm object across tasks.
         state = _TaskRun()
         state.config = dict(self.config)
