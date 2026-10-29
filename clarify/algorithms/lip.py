@@ -26,6 +26,11 @@ from clarify.baselines import ClarificationAlgorithmBase
 from clarify.env import LimitsExceededException
 
 
+def exception_name(exc):
+    """Return the exception class name without accessing private attributes."""
+    return str(type(exc)).partition("\'")[2].rpartition("\'")[0].rsplit(".", 1)[-1]
+
+
 def _json(text):
     text = str(text).strip()
     if text.startswith("```"):
@@ -52,7 +57,7 @@ def _structure(code, entry):
     try:
         tree = ast.parse(code)
     except (SyntaxError, ValueError) as exc:
-        return {"passed": False, "errors": [type(exc).__name__ + ": " + str(exc)]}
+        return {"passed": False, "errors": [exception_name(exc) + ": " + str(exc)]}
     functions = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
     target = next((node for node in functions if node.name == entry), None)
     if target is None:
@@ -70,69 +75,15 @@ class _RepairFlow(ClarificationAlgorithmBase):
 
     DEFAULT_CONFIG = {"repair_rounds": 3}
 
-    def _llm_json(self, env, prompt):
+    def llm_json(self, env, prompt):
         return _json(env.llm(prompt))
 
-    def _question(self, env, problem):
-        payload = {"prompt": problem["prompt"], "entry_point": problem["entry_point"]}
-        response = self._llm_json(
-            env,
-                "Inspect this visible Python task and list up to three candidate atomic questions "
-                "about facts that could change the implementation. For each candidate return "
-                "question, kind, impact (1-5), and evidence. Kinds include mapping, constant, "
-                "default, tie_break, behavior, output_shape, signature, boundary and other. "
-                "Prioritize explicit unresolved mappings or constants, replacement rules, defaults, "
-                "tie-breaks and contradictions with examples. Ask about output shape only when it "
-                "is a real unresolved risk and no higher-impact semantic gap exists. Do not ask "
-                "about algorithms, style, hidden tests or facts already explicit in the prompt. "
-                "Return JSON {candidates:[...]}.\n" +
-            json.dumps(payload, ensure_ascii=False),
-        )
-        candidates = response.get("candidates", [])
-        if not isinstance(candidates, list): candidates = []
-        prompt_text = problem["prompt"].lower()
-        mapping_cue = bool(re.search(r"another\s+(?:letter|character|value)|replace\w*\s+.+?\s+with\s+|some\s+(?:value|number|letter)|appropriate\s+(?:value|default)", prompt_text))
-        # A bare mention of "list" usually describes the input container, not
-        # the return shape.  The old gate treated it as an explicit output
-        # contract and therefore missed tasks such as "count unique lists",
-        # where integer-versus-frequency-map is the central ambiguity.
-        explicit_output = bool(re.search(
-            r"\b(return|returns|output|type|integer|string|boolean|dictionary|dict|tuple)\b"
-            r"|\b(return|output)\s+(?:a|an|the)?\s*(?:list|array)\b", prompt_text))
-        count_or_frequency_cue = bool(re.search(
-            r"\b(count|number|how many|frequency|frequencies|occurrence|occurrences|unique)\b",
-            prompt_text))
-        output_shape_cue = (not mapping_cue and not explicit_output and
-                            count_or_frequency_cue and
-                            not re.search(r"(?:>>>|example|e\.g\.)", prompt_text))
-        def candidate_score(candidate):
-            if not isinstance(candidate, dict): return -1
-            kind = str(candidate.get("kind", "other")).lower()
-            try: impact = int(candidate.get("impact", 0))
-            except Exception: impact = 0
-            score = impact
-            if mapping_cue and kind in {"mapping", "constant", "default", "behavior"}: score += 10
-            if kind == "output_shape" and mapping_cue: score -= 6
-            return score
-        selected = max(candidates, key=candidate_score, default={})
-        if mapping_cue and str(selected.get("kind", "")).lower() not in {"mapping", "constant", "default", "behavior"}:
-            selected = {"question": "What exact letter, value, or mapping should replace the unspecified item in the prompt?",
-                        "kind": "mapping", "impact": 5, "evidence": "visible prompt contains an unspecified replacement rule"}
-        if output_shape_cue and str(selected.get("kind", "")).lower() not in {"output_shape", "signature"}:
-            selected = {"question": "Should this function return a scalar count, a frequency mapping, or another exact output shape for the requested input?",
-                        "kind": "output_shape", "impact": 5, "evidence": "visible prompt has no return contract or examples"}
-        question = selected.get("question", "") if isinstance(selected, dict) else ""
-        if not isinstance(question, str) or not question.strip():
-            question = "For the smallest boundary input described by this task, what exact return value is intended?"
-        response["selected"] = selected
-        response["selected_question"] = question.strip()
-        return question.strip(), response
 
-    def _contract(self, env, problem, question, answer):
+    def contract(self, env, problem, question, answer):
         payload = {"prompt": problem["prompt"], "entry_point": problem["entry_point"],
                    "question": question, "answer": answer}
         try:
-            contract = self._llm_json(
+            contract = self.llm_json(
                 env,
                 "Extract an implementation contract from only this visible task and actual user "
                 "answer. Copy every explicit example input and expected output into examples; "
@@ -142,13 +93,14 @@ class _RepairFlow(ClarificationAlgorithmBase):
                 "examples (list of {input, output}), edge_risks (list), and unresolved (list). "
                 "Do not infer hidden tests or reference code.\n" + json.dumps(payload, ensure_ascii=False),
             )
-            if not isinstance(contract.get("examples", []), list): contract["examples"] = []
+            if not isinstance(contract.get("examples", []), list):
+                contract["examples"] = []
             return contract
         except Exception as exc:
             return {"signature": problem["entry_point"], "return_contract": "unknown",
-                    "examples": [], "edge_risks": [], "unresolved": [type(exc).__name__]}
+                    "examples": [], "edge_risks": [], "unresolved": [exception_name(exc)]}
 
-    def _generate(self, env, problem, question, answer, contract):
+    def generate(self, env, problem, question, answer, contract):
         payload = {"prompt": problem["prompt"], "entry_point": problem["entry_point"],
                    "question": question, "answer": answer, "contract": contract}
         text = env.llm(
@@ -159,11 +111,11 @@ class _RepairFlow(ClarificationAlgorithmBase):
         )
         return _extract_code(text, problem["entry_point"])
 
-    def _audit(self, env, problem, question, answer, contract, code):
+    def audit(self, env, problem, question, answer, contract, code):
         payload = {"prompt": problem["prompt"], "entry_point": problem["entry_point"],
                    "question": question, "answer": answer, "contract": contract, "candidate": code}
         try:
-            report = self._llm_json(
+            report = self.llm_json(
                 env,
                 "Audit this candidate only against the visible task, every explicit example, "
                 "the extracted contract and the actual user answer. "
@@ -177,14 +129,14 @@ class _RepairFlow(ClarificationAlgorithmBase):
             report.setdefault("risks", [])
             return report
         except Exception as exc:
-            return {"blocking_errors": ["audit_unparseable:" + type(exc).__name__],
+            return {"blocking_errors": ["audit_unparseable:" + exception_name(exc)],
                     "risks": [], "summary": "audit response could not be parsed"}
 
-    def _probes(self, env, problem, contract, code):
+    def probes(self, env, problem, contract, code):
         payload = {"prompt": problem["prompt"], "entry_point": problem["entry_point"],
                    "contract": contract, "candidate": code}
         try:
-            response = self._llm_json(
+            response = self.llm_json(
                 env,
                 "Generate executable Python assertions from only the visible task and extracted "
                 "contract. Return JSON {tests:[string]}. First include every explicit example "
@@ -199,9 +151,9 @@ class _RepairFlow(ClarificationAlgorithmBase):
                 raise ValueError("invalid_probe_list")
             return tests[:4], {"status": "generated", "tests": tests[:4]}
         except Exception as exc:
-            return [], {"status": "probe_generation_failed", "error_type": type(exc).__name__}
+            return [], {"status": "probe_generation_failed", "error_type": exception_name(exc)}
 
-    def _run_probes(self, env, code, tests):
+    def run_probes(self, env, code, tests):
         if not tests:
             return {"status": "unavailable", "output": "no probes"}
         script = code + "\n\n" + "\n".join(tests) + '\nprint("__VISIBLE_PROBES_OK__")\n'
@@ -210,12 +162,12 @@ class _RepairFlow(ClarificationAlgorithmBase):
         except LimitsExceededException:
             raise
         except Exception as exc:
-            return {"status": "unavailable", "output": type(exc).__name__ + ": " + str(exc)}
+            return {"status": "unavailable", "output": exception_name(exc) + ": " + str(exc)}
         if "__VISIBLE_PROBES_OK__" in str(output):
             return {"status": "passed", "output": str(output)}
         return {"status": "failed", "output": str(output)}
 
-    def _repair(self, env, problem, question, answer, contract, code, diagnostics):
+    def repair(self, env, problem, question, answer, contract, code, diagnostics):
         payload = {"prompt": problem["prompt"], "entry_point": problem["entry_point"],
                    "question": question, "answer": answer, "candidate": code,
                    "contract": contract, "diagnostics": diagnostics}
@@ -231,7 +183,7 @@ class _RepairFlow(ClarificationAlgorithmBase):
     def run(self, env, problem):
         self.trace = []
         self.artifacts = {"variant": "always_ask_repair_v8", "qa_events": [], "rounds": []}
-        question, question_meta = self._question(env, problem)
+        question, question_meta = self.question(env, problem)
         event = {"question": copy.deepcopy(question), "status": "attempted"}
         self.artifacts["qa_events"].append(event)
         try:
@@ -239,20 +191,20 @@ class _RepairFlow(ClarificationAlgorithmBase):
         except LimitsExceededException:
             raise
         except Exception as exc:
-            event.update(status="error", error_type=type(exc).__name__)
+            event.update(status="error", error_type=exception_name(exc))
             answer = ""
         else:
             event.update(status="completed", answer=copy.deepcopy(answer))
-        contract = self._contract(env, problem, question, answer)
-        code = self._generate(env, problem, question, answer, contract)
-        tests, probe_meta = self._probes(env, problem, contract, code)
+        contract = self.contract(env, problem, question, answer)
+        code = self.generate(env, problem, question, answer, contract)
+        tests, probe_meta = self.probes(env, problem, contract, code)
         max_rounds = self.config.get("repair_rounds", 3)
         if type(max_rounds) is not int or max_rounds < 0:
             raise ValueError("repair_rounds must be a non-negative integer")
         for round_id in range(max_rounds + 1):
             structure = _structure(code, problem["entry_point"])
-            audit = self._audit(env, problem, question, answer, contract, code)
-            execution = self._run_probes(env, code, tests)
+            audit = self.audit(env, problem, question, answer, contract, code)
+            execution = self.run_probes(env, code, tests)
             record = {"round": round_id, "structure": structure, "audit": audit,
                       "probe_generation": copy.deepcopy(probe_meta), "execution": execution,
                       "code": code}
@@ -264,7 +216,7 @@ class _RepairFlow(ClarificationAlgorithmBase):
             if round_id == max_rounds:
                 break
             diagnostics = {"structure": structure, "audit": audit, "execution": execution}
-            repaired = self._repair(env, problem, question, answer, contract, code, diagnostics)
+            repaired = self.repair(env, problem, question, answer, contract, code, diagnostics)
             if repaired == code:
                 break
             code = repaired
@@ -502,7 +454,7 @@ def _structured_response(env, prompt, validator, phase):
 class EvidenceGuidedRepairClarifier(_RepairFlow):
     """The original v9 selection with strict source-labelled evidence."""
 
-    def _question(self, env, problem):
+    def question(self, env, problem):
         visible = {"prompt": problem["prompt"], "entry_point": problem["entry_point"]}
         prompt = (
             "Examine only this visible Python task. Identify unresolved facts whose answers "
