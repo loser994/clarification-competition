@@ -78,13 +78,21 @@ def _structure(code, entry):
     }
 
 
+class ResponseFormatError(ValueError):
+    pass
+
+
 class _RepairFlow(ClarificationAlgorithmBase):
     """One atomic question on every task, followed by bounded repair."""
 
     DEFAULT_CONFIG = {"repair_rounds": 3}
 
     def llm_json(self, env, prompt):
-        return _json(env.llm(prompt))
+        response = env.llm(prompt)
+        try:
+            return _json(response)
+        except (ValueError, TypeError) as exc:
+            raise ResponseFormatError(str(exc)) from exc
 
     def contract(self, env, problem, question, answer):
         payload = {
@@ -102,13 +110,14 @@ class _RepairFlow(ClarificationAlgorithmBase):
                 "return type or shape, set return_contract to 'unspecified' and add that fact to "
                 "unresolved; never infer it from the function name. Return JSON with signature, return_contract, "
                 "examples (list of {input, output}), edge_risks (list), and unresolved (list). "
+                "A null question and answer mean no clarification occurred; do not invent an answer. "
                 "Do not infer hidden tests or reference code.\n"
                 + json.dumps(payload, ensure_ascii=False),
             )
             if not isinstance(contract.get("examples", []), list):
                 contract["examples"] = []
             return contract
-        except Exception as exc:
+        except ResponseFormatError as exc:
             return {
                 "signature": problem["entry_point"],
                 "return_contract": "unknown",
@@ -129,6 +138,7 @@ class _RepairFlow(ClarificationAlgorithmBase):
             "Implement exactly the requested entry_point. Return a complete Python function "
             "in a python fence. Preserve every explicit prompt constraint. The user answer "
             "resolves only the fact it directly addresses; do not invent additional behavior.\n"
+            "A null question and answer mean no clarification occurred.\n"
             + json.dumps(payload, ensure_ascii=False)
         )
         return _extract_code(text, problem["entry_point"])
@@ -156,7 +166,7 @@ class _RepairFlow(ClarificationAlgorithmBase):
             report.setdefault("blocking_errors", [])
             report.setdefault("risks", [])
             return report
-        except Exception as exc:
+        except ResponseFormatError as exc:
             return {
                 "blocking_errors": ["audit_unparseable:" + exception_name(exc)],
                 "risks": [],
@@ -185,9 +195,9 @@ class _RepairFlow(ClarificationAlgorithmBase):
             if not isinstance(tests, list) or not all(
                 isinstance(test, str) and test.strip() for test in tests
             ):
-                raise ValueError("invalid_probe_list")
+                raise ResponseFormatError("invalid_probe_list")
             return tests[:4], {"status": "generated", "tests": tests[:4]}
-        except Exception as exc:
+        except ResponseFormatError as exc:
             return [], {"status": "probe_generation_failed", "error_type": exception_name(exc)}
 
     def run_probes(self, env, code, tests):
@@ -226,18 +236,21 @@ class _RepairFlow(ClarificationAlgorithmBase):
     def run(self, env, problem):
         self.trace = []
         self.artifacts = {"variant": "always_ask_repair_v8", "qa_events": [], "rounds": []}
-        question, question_meta = self.question(env, problem)
-        event = {"question": copy.deepcopy(question), "status": "attempted"}
-        self.artifacts["qa_events"].append(event)
         try:
-            answer = env.ask_human(question)
-        except LimitsExceededException:
-            raise
-        except Exception as exc:
-            event.update(status="error", error_type=exception_name(exc))
-            answer = ""
+            question, question_meta = self.question(env, problem)
+        except (QuestionPolicyFormatError, QuestionPolicyDecisionError) as exc:
+            question, answer = None, None
+            question_meta = {"status": "skipped", "reason": exception_name(exc), "detail": str(exc)}
+            if hasattr(exc, "validation_error"):
+                question_meta["cause"] = exc.validation_error
+            if hasattr(exc, "diagnostics"):
+                question_meta["diagnostics"] = exc.diagnostics
         else:
+            event = {"question": copy.deepcopy(question), "status": "attempted"}
+            self.artifacts["qa_events"].append(event)
+            answer = env.ask_human(question)
             event.update(status="completed", answer=copy.deepcopy(answer))
+        self.artifacts["question_meta"] = question_meta
         contract = self.contract(env, problem, question, answer)
         code = self.generate(env, problem, question, answer, contract)
         tests, probe_meta = self.probes(env, problem, contract, code)
@@ -517,7 +530,9 @@ def _structured_response(env, prompt, validator, phase):
             return value, {"format_repairs": attempt, "format_errors": format_errors}
         except (json.JSONDecodeError, QuestionPolicyFormatError) as exc:
             if attempt:
-                raise QuestionPolicyFormatError(phase + " invalid after one format repair") from exc
+                error = QuestionPolicyFormatError(phase + " invalid after one format repair")
+                error.validation_error = str(exc)
+                raise error from exc
             format_errors.append(str(exc))
         response = env.llm(
             "Repair only the JSON/field structure of the response to the original task below. "
@@ -623,9 +638,15 @@ class EvidenceGuidedRepairClarifier(_RepairFlow):
         forced = review["selected_id"] is None
         if forced:
             if not review["confirmation_appropriate"]:
-                raise QuestionPolicyDecisionError(
+                error = QuestionPolicyDecisionError(
                     "no eligible question or approved task-specific confirmation"
                 )
+                error.diagnostics = {
+                    "plan": copy.deepcopy(plan),
+                    "review": copy.deepcopy(review),
+                    "format_validation": {"plan": plan_format, "review": review_format},
+                }
+                raise error
             selected = copy.deepcopy(plan["confirmation"])
         else:
             selected = copy.deepcopy(
