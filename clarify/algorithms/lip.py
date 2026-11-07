@@ -8,16 +8,16 @@ from __future__ import annotations
 
 import ast
 import builtins
-import io
-import keyword
-import re
-import tokenize
-import json
 import copy
 import hashlib
+import io
+import json
+import keyword
 import math
-from clarify.baselines.base import ClarificationAlgorithmBase as _AlgorithmBase
+import re
+import tokenize
 
+from clarify.baselines.base import ClarificationAlgorithmBase as _AlgorithmBase
 
 CONTRACT = """Find one unresolved decision in the specification of {entry} that changes
 observable behavior. You receive original requirements, a particular candidate, and
@@ -199,21 +199,24 @@ LITERAL_FAILURES = (ValueError, SyntaxError, TypeError, MemoryError, RecursionEr
 NEGATION = re.compile(r"\b(?:not|never|instead\s+of|rather\s+than)\b|n't\b", re.I)
 
 
-_RELATION = re.compile(r"\s*,?\s*(?:(?:it|this|that|the function|the result|the output)\s+)?(?:(?:should|must|would|will)\s+)?(?:==>|==|->|=>|→|returns?|returning|gives?|giving|outputs?|equals?|be|is|:)\s*", re.I)
+_RELATION = re.compile(
+    r"\s*,?\s*(?:(?:it|this|that|the function|the result|the output)\s+)?(?:(?:should|must|would|will)\s+)?(?:==>|==|->|=>|→|returns?|returning|gives?|giving|outputs?|equals?|be|is|:)\s*",
+    re.I,
+)
 
 
-def _fences(text, languages=('', 'python', 'py')):
+def _fences(text, languages=("", "python", "py")):
     if not isinstance(text, str):
         return []
     blocks, current, marker = [], None, None
     for line in text.splitlines(keepends=True):
         stripped = line.strip()
         if current is None:
-            match = re.fullmatch(r'(`{3,}|~{3,})([^`~]*)', stripped)
+            match = re.fullmatch(r"(`{3,}|~{3,})([^`~]*)", stripped)
             if match and match[2].strip().lower() in languages:
                 marker, current = match[1], []
         elif stripped == marker:
-            blocks.append(''.join(current).strip())
+            blocks.append("".join(current).strip())
             current, marker = None, None
         else:
             current.append(line)
@@ -225,44 +228,67 @@ def extract_fenced_code(response):
 
 
 def extract_code(response, entry_point, declared=None):
-    if not isinstance(response, str) or not isinstance(entry_point, str) or not entry_point.isidentifier() or keyword.iskeyword(entry_point):
+    if (
+        not isinstance(response, str)
+        or not isinstance(entry_point, str)
+        or not entry_point.isidentifier()
+        or keyword.iskeyword(entry_point)
+    ):
         return None
     for source in [*_fences(response), response.strip()]:
         try:
             tree = ast.parse(source)
         except LITERAL_FAILURES:
             continue
-        functions = {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        functions = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
         if entry_point in functions:
             return source
-        if declared in functions and entry_point not in {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}:
-            return source + '\n\n' + entry_point + ' = ' + declared + '\n'
+        if declared in functions and entry_point not in {
+            node.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+        }:
+            return source + "\n\n" + entry_point + " = " + declared + "\n"
     return None
 
 
 def clean_question(text):
     if not isinstance(text, str):
-        return ''
-    value = text.strip().strip('`').strip()
-    label, colon, content = value.partition(':')
-    if colon and label.strip().casefold() in {'question', 'q'}:
+        return ""
+    value = text.strip().strip("`").strip()
+    label, colon, content = value.partition(":")
+    if colon and label.strip().casefold() in {"question", "q"}:
         value = content
-    return ' '.join(value.split()).replace('`', "'")
+    return " ".join(value.split()).replace("`", "'")
 
 
 def name_variants(entry_point):
     if not isinstance(entry_point, str) or not entry_point.isidentifier():
         return []
-    words = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', entry_point)
-    words = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', words)
+    words = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", entry_point)
+    words = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", words)
     candidates = {entry_point.lower(), words.lower()}
-    return sorted(name for name in candidates if name != entry_point and name.isidentifier() and not keyword.iskeyword(name) and not hasattr(builtins, name))
+    return sorted(
+        name
+        for name in candidates
+        if name != entry_point
+        and name.isidentifier()
+        and not keyword.iskeyword(name)
+        and not hasattr(builtins, name)
+    )
 
 
 def declared_name(prompt, entry_point):
     if not isinstance(prompt, str):
         return None
-    found = {m[1] for m in re.finditer(r'(?m)^\s*(?:>>>\s*)?(?:async\s+)?def\s+([^\W\d]\w*)\s*\(', prompt)}
+    found = {
+        m[1]
+        for m in re.finditer(r"(?m)^\s*(?:>>>\s*)?(?:async\s+)?def\s+([^\W\d]\w*)\s*\(", prompt)
+    }
     return next(iter(found)) if len(found) == 1 and entry_point not in found else None
 
 
@@ -283,17 +309,27 @@ def literal_span(text):
     if not isinstance(text, str) or not text.strip():
         return False, None, 0
     start = len(text) - len(text.lstrip())
-    source = text[start:start + 2048]
+    source = text[start : start + 2048]
     best = None
     for token, end in _tokens(source):
-        if token.type in (tokenize.NEWLINE, tokenize.NL, tokenize.ENDMARKER, tokenize.INDENT, tokenize.DEDENT):
+        if token.type in (
+            tokenize.NEWLINE,
+            tokenize.NL,
+            tokenize.ENDMARKER,
+            tokenize.INDENT,
+            tokenize.DEDENT,
+        ):
             continue
         if token.type == tokenize.ERRORTOKEN and not token.string.isspace():
             break
-        if token.type == tokenize.NUMBER and token.string.endswith('.') and token.string[:-1].isdigit():
+        if (
+            token.type == tokenize.NUMBER
+            and token.string.endswith(".")
+            and token.string[:-1].isdigit()
+        ):
             end -= 1
         try:
-            tree = ast.parse(source[:end], mode='eval')
+            tree = ast.parse(source[:end], mode="eval")
             if sum(1 for _ in ast.walk(tree)) > 256:
                 return False, None, 0
             value = ast.literal_eval(tree)
@@ -306,11 +342,11 @@ def literal_span(text):
     remainder = source[end:]
     immediate = remainder[:1]
     suffix = remainder.lstrip()
-    if immediate and (immediate.isalnum() or immediate == '_'):
+    if immediate and (immediate.isalnum() or immediate == "_"):
         return False, None, 0
-    if suffix.startswith(('+', '-', '*', '/', '%', '^', '&', '|', '<', '>', '=', '(', '[')):
+    if suffix.startswith(("+", "-", "*", "/", "%", "^", "&", "|", "<", ">", "=", "(", "[")):
         return False, None, 0
-    if immediate == '.' and len(remainder) > 1 and (remainder[1].isalnum() or remainder[1] == '_'):
+    if immediate == "." and len(remainder) > 1 and (remainder[1].isalnum() or remainder[1] == "_"):
         return False, None, 0
     return True, value, start + end
 
@@ -321,9 +357,9 @@ def leading_literal(text):
 
 
 def edited_text(reply):
-    if not isinstance(reply, str) or reply.lstrip().upper().startswith('UNCHANGED'):
+    if not isinstance(reply, str) or reply.lstrip().upper().startswith("UNCHANGED"):
         return None
-    return next(iter(_fences(reply, ('', 'text'))), None)
+    return next(iter(_fences(reply, ("", "text"))), None)
 
 
 def accept_deletion(original, edited, names):
@@ -332,8 +368,8 @@ def accept_deletion(original, edited, names):
 
 def balanced_prefix(source):
     stack = []
-    pairs = {')': '(', ']': '[', '}': '{'}
-    for token, end in _tokens(source):
+    pairs = {")": "(", "]": "[", "}": "{"}
+    for token, _end in _tokens(source):
         if token.type != tokenize.OP:
             continue
         if token.string in pairs:
@@ -350,19 +386,19 @@ def literal_calls(text, name):
     if not isinstance(text, str) or not isinstance(name, str) or not name.isidentifier():
         return []
     calls = []
-    for match in re.finditer(r'(?<![\w.])' + re.escape(name) + r'\s*\(', text):
+    for match in re.finditer(r"(?<![\w.])" + re.escape(name) + r"\s*\(", text):
         opening = match.end() - 1
         depth, closing = 0, None
-        for token, end in _tokens(text[opening:opening + 4096]):
+        for token, end in _tokens(text[opening : opening + 4096]):
             if token.type == tokenize.OP:
-                depth += int(token.string in '([{') - int(token.string in ')]}')
+                depth += int(token.string in "([{") - int(token.string in ")]}")
                 if depth == 0:
                     closing = opening + end
                     break
         if closing is None:
             continue
         try:
-            node = ast.parse(text[match.start():closing], mode='eval').body
+            node = ast.parse(text[match.start() : closing], mode="eval").body
             if not isinstance(node, ast.Call) or node.keywords or len(node.args) > 64:
                 continue
             args = tuple(ast.literal_eval(arg) for arg in node.args)
@@ -376,29 +412,35 @@ def doctest_output(prompt, end):
     result = []
     for line in prompt[end:].splitlines()[1:]:
         stripped = line.strip()
-        if not stripped or stripped.startswith(('>>>', '```', chr(34) * 3, chr(39) * 3)):
+        if not stripped or stripped.startswith((">>>", "```", chr(34) * 3, chr(39) * 3)):
             break
         result.append(stripped)
-    return '\n'.join(result)
+    return "\n".join(result)
 
 
 def _call_relations(text, names, doctests=False):
     result = []
     for name in dict.fromkeys(names):
         for arguments, end in literal_calls(text, name):
-            line_start = text.rfind('\n', 0, end) + 1
+            line_start = text.rfind("\n", 0, end) + 1
             prefix = text[line_start:end]
             name_start = prefix.rfind(name)
             context = prefix[:name_start]
-            if NEGATION.search(context) or re.search(r'\b(?:if|unless|suppose|supposing)\b', context, re.I):
+            if NEGATION.search(context) or re.search(
+                r"\b(?:if|unless|suppose|supposing)\b", context, re.I
+            ):
                 continue
             suffix = text[end:]
             connector = _RELATION.match(suffix)
             payload = None
-            if doctests and prefix.lstrip().startswith('>>>') and not suffix.split('\n', 1)[0].strip():
+            if (
+                doctests
+                and prefix.lstrip().startswith(">>>")
+                and not suffix.split("\n", 1)[0].strip()
+            ):
                 payload = doctest_output(text, end)
             elif connector:
-                payload = suffix[connector.end():].split('\n', 1)[0]
+                payload = suffix[connector.end() :].split("\n", 1)[0]
             if payload is not None:
                 ok, expected = leading_literal(payload)
                 if ok:
@@ -425,7 +467,11 @@ def assigned_literals(code_block, names):
         return {}
     allowed, result, ambiguous = set(names), {}, set()
     for statement in tree.body:
-        if not isinstance(statement, ast.Assign) or len(statement.targets) != 1 or not isinstance(statement.targets[0], ast.Name):
+        if (
+            not isinstance(statement, ast.Assign)
+            or len(statement.targets) != 1
+            or not isinstance(statement.targets[0], ast.Name)
+        ):
             continue
         key = statement.targets[0].id
         if key not in allowed or key in ambiguous:
@@ -451,11 +497,22 @@ def read_block_values(response, names):
 def is_demo(node):
     if isinstance(node, ast.If):
         test = node.test
-        return (isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq)
-                and isinstance(test.left, ast.Name) and test.left.id == '__name__'
-                and len(test.comparators) == 1 and isinstance(test.comparators[0], ast.Constant)
-                and test.comparators[0].value == '__main__')
-    return isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id in {'print', 'input'}
+        return (
+            isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Eq)
+            and isinstance(test.left, ast.Name)
+            and test.left.id == "__name__"
+            and len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast.Constant)
+            and test.comparators[0].value == "__main__"
+        )
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id in {"print", "input"}
+    )
 
 
 def sanitize(code):
@@ -470,46 +527,52 @@ def sanitize(code):
     for statement in tree.body:
         if is_demo(statement):
             excluded.update(range(statement.lineno - 1, statement.end_lineno))
-    return ''.join(line for index, line in enumerate(lines) if index not in excluded)
+    return "".join(line for index, line in enumerate(lines) if index not in excluded)
 
 
 def call_text(entry, args_repr):
     try:
         arguments = ast.literal_eval(args_repr)
     except LITERAL_FAILURES:
-        return str(entry) + '(' + str(args_repr).strip() + ')'
+        return str(entry) + "(" + str(args_repr).strip() + ")"
     if not isinstance(arguments, tuple):
         arguments = (arguments,)
-    return str(entry) + '(' + ', '.join(repr(argument) for argument in arguments) + ')'
+    return str(entry) + "(" + ", ".join(repr(argument) for argument in arguments) + ")"
 
 
 def phrase(text, limit=220):
-    normalized = ' '.join(('' if text is None else str(text)).split()).replace('`', "'")
-    return normalized[:max(0, limit)].rstrip(' .;,')
+    normalized = " ".join(("" if text is None else str(text)).split()).replace("`", "'")
+    return normalized[: max(0, limit)].rstrip(" .;,")
 
 
 def quoted_in(prompt, quote):
     if not isinstance(prompt, str) or not isinstance(quote, str):
         return False
-    excerpt = ' '.join(quote.strip('"\' ').casefold().split())
-    return len(excerpt) >= 8 and excerpt in ' '.join(prompt.casefold().split())
+    excerpt = " ".join(quote.strip("\"' ").casefold().split())
+    return len(excerpt) >= 8 and excerpt in " ".join(prompt.casefold().split())
 
 
 def answer_relations(answer, names):
     if not isinstance(answer, str):
         return []
     relations = _call_relations(answer, names)
-    pattern = re.compile(r'\bfor\s+(?:(?:the|a|an)\s+)?(?:input|argument|value|call|n|x)?\s*(?:of\s+|=\s*)?', re.I)
+    pattern = re.compile(
+        r"\bfor\s+(?:(?:the|a|an)\s+)?(?:input|argument|value|call|n|x)?\s*(?:of\s+|=\s*)?", re.I
+    )
     starts = [(match.end(), match.start()) for match in pattern.finditer(answer)]
-    starts.extend((match.start(), match.start()) for match in re.finditer(r'(?<![\w])(?=[\[\(\'\"])', answer))
+    starts.extend(
+        (match.start(), match.start()) for match in re.finditer(r"(?<![\w])(?=[\[\(\'\"])", answer)
+    )
     for start, context_start in starts:
-        ok, argument, consumed = literal_span(answer[start:start + 2048])
+        ok, argument, consumed = literal_span(answer[start : start + 2048])
         if not ok:
             continue
         connector = _RELATION.match(answer, start + consumed)
-        if connector is None or NEGATION.search(answer[max(0, context_start - 40):connector.end()]):
+        if connector is None or NEGATION.search(
+            answer[max(0, context_start - 40) : connector.end()]
+        ):
             continue
-        accepted, expected = leading_literal(answer[connector.end():].split('\n', 1)[0])
+        accepted, expected = leading_literal(answer[connector.end() :].split("\n", 1)[0])
         if accepted and not stated_in(relations, (argument,), expected):
             relations.append(((argument,), expected))
     return relations
@@ -524,17 +587,58 @@ def safe_property(expr):
     if not isinstance(expr, str) or not expr.strip() or len(expr) > 200:
         return None
     try:
-        tree = ast.parse(expr.strip(), mode='eval')
+        tree = ast.parse(expr.strip(), mode="eval")
     except LITERAL_FAILURES:
         return None
-    functions = {'len', 'isinstance', 'all', 'any', 'sorted', 'sum', 'abs', 'min', 'max', 'type', 'list', 'tuple', 'str', 'int', 'float', 'bool', 'dict', 'set'}
-    permitted = (ast.Expression, ast.Constant, ast.Name, ast.Load, ast.Compare, ast.BoolOp, ast.UnaryOp, ast.BinOp, ast.Subscript, ast.Slice, ast.Tuple, ast.List, ast.Dict, ast.Set, ast.Call, ast.cmpop, ast.boolop, ast.unaryop, ast.operator)
+    functions = {
+        "len",
+        "isinstance",
+        "all",
+        "any",
+        "sorted",
+        "sum",
+        "abs",
+        "min",
+        "max",
+        "type",
+        "list",
+        "tuple",
+        "str",
+        "int",
+        "float",
+        "bool",
+        "dict",
+        "set",
+    }
+    permitted = (
+        ast.Expression,
+        ast.Constant,
+        ast.Name,
+        ast.Load,
+        ast.Compare,
+        ast.BoolOp,
+        ast.UnaryOp,
+        ast.BinOp,
+        ast.Subscript,
+        ast.Slice,
+        ast.Tuple,
+        ast.List,
+        ast.Dict,
+        ast.Set,
+        ast.Call,
+        ast.cmpop,
+        ast.boolop,
+        ast.unaryop,
+        ast.operator,
+    )
     for node in ast.walk(tree):
         if not isinstance(node, permitted):
             return None
-        if isinstance(node, ast.Name) and node.id not in functions | {'args', 'out'}:
+        if isinstance(node, ast.Name) and node.id not in functions | {"args", "out"}:
             return None
-        if isinstance(node, ast.Call) and (not isinstance(node.func, ast.Name) or node.func.id not in functions or node.keywords):
+        if isinstance(node, ast.Call) and (
+            not isinstance(node.func, ast.Name) or node.func.id not in functions or node.keywords
+        ):
             return None
         if isinstance(node, (ast.Pow, ast.MatMult)):
             return None
@@ -554,13 +658,20 @@ def exact_value(left, right):
         if type(a) in (list, tuple):
             if len(a) != len(b):
                 return False
-            pending.extend(zip(a, b))
+            pending.extend(zip(a, b, strict=False))
         elif type(a) is dict:
             if len(a) != len(b):
                 return False
             unmatched = list(b.items())
             for key, value in a.items():
-                match = next((index for index, (other, _) in enumerate(unmatched) if exact_value(key, other)), None)
+                match = next(
+                    (
+                        index
+                        for index, (other, _) in enumerate(unmatched)
+                        if exact_value(key, other)
+                    ),
+                    None,
+                )
                 if match is None:
                     return False
                 _, other_value = unmatched.pop(match)
@@ -579,9 +690,9 @@ def exact_value(left, right):
 def explicit_example_confirmation(answer):
     if not isinstance(answer, str) or NEGATION.search(answer):
         return False
-    clauses = re.split(r'[.;!?\n]', answer.casefold())
-    referent = re.compile(r'\b(?:example|call|output|result)\b')
-    approval = re.compile(r'\b(?:correct|right|confirmed|confirm|accept)\b')
+    clauses = re.split(r"[.;!?\n]", answer.casefold())
+    referent = re.compile(r"\b(?:example|call|output|result)\b")
+    approval = re.compile(r"\b(?:correct|right|confirmed|confirm|accept)\b")
     return any(referent.search(clause) and approval.search(clause) for clause in clauses)
 
 
@@ -590,15 +701,21 @@ def reference_relation(answer, example):
         return []
     text = answer.strip()
     try:
-        direct = ast.literal_eval(text.removesuffix('.'))
+        direct = ast.literal_eval(text.removesuffix("."))
     except LITERAL_FAILURES:
         direct = None
     else:
         return [(example[0], direct)]
-    reference = re.search(r'\b(?:(?:that|this|your|the)\s+(?:example|call|input)|for that|it\s+(?:should|must))\b', text, re.I)
+    reference = re.search(
+        r"\b(?:(?:that|this|your|the)\s+(?:example|call|input)|for that|it\s+(?:should|must))\b",
+        text,
+        re.I,
+    )
     if reference is None:
         return []
-    result = re.search(r'\b(?:should|must)\s+(?:return|give|be)\s+', text[reference.start():], re.I)
+    result = re.search(
+        r"\b(?:should|must)\s+(?:return|give|be)\s+", text[reference.start() :], re.I
+    )
     if result is None:
         return []
     end = reference.start() + result.end()
@@ -609,38 +726,63 @@ def reference_relation(answer, example):
 
 
 def constraint_ledger(answer, compiled, question, example):
-    raw = answer.strip() if isinstance(answer, str) else ''
+    raw = answer.strip() if isinstance(answer, str) else ""
     records = []
     if not raw:
         return records
-    records.append(dict(id='answer.raw', source='answer', quote=raw, text=raw,
-        scope='unresolved', polarity='unresolved', status='authoritative_in_context',
-        executable=False, question=question))
-    proposals = compiled.get('CONSTRAINTS') if isinstance(compiled, dict) else None
+    records.append(
+        dict(
+            id="answer.raw",
+            source="answer",
+            quote=raw,
+            text=raw,
+            scope="unresolved",
+            polarity="unresolved",
+            status="authoritative_in_context",
+            executable=False,
+            question=question,
+        )
+    )
+    proposals = compiled.get("CONSTRAINTS") if isinstance(compiled, dict) else None
     if not isinstance(proposals, list):
         return records
-    vague = re.fullmatch(r'(?:(?:yes|ok|correct|sure|right|that is correct|that is right)[, .!\s]*)+', raw, re.I) is not None
+    vague = (
+        re.fullmatch(
+            r"(?:(?:yes|ok|correct|sure|right|that is correct|that is right)[, .!\s]*)+", raw, re.I
+        )
+        is not None
+    )
     seen = set()
     for proposal in proposals:
         if not isinstance(proposal, dict):
             continue
-        quote = proposal.get('quote')
+        quote = proposal.get("quote")
         if not isinstance(quote, str) or not quote.strip() or quote.strip() not in raw:
             continue
         quote = quote.strip()
-        scope = proposal.get('scope')
-        scope = scope if scope in {'example', 'general'} and not vague else 'unresolved'
-        polarity = proposal.get('polarity')
-        polarity = polarity if polarity in {'require', 'forbid'} else 'unresolved'
+        scope = proposal.get("scope")
+        scope = scope if scope in {"example", "general"} and not vague else "unresolved"
+        polarity = proposal.get("polarity")
+        polarity = polarity if polarity in {"require", "forbid"} else "unresolved"
         identity = (quote, scope, polarity)
         if identity in seen:
             continue
         seen.add(identity)
-        interpretation = proposal.get('text')
-        records.append(dict(id='answer.' + str(len(records)), source='answer', quote=quote,
-            text=quote, interpretation=interpretation if isinstance(interpretation, str) else quote,
-            scope=scope, polarity=polarity, reference=proposal.get('reference'),
-            status='requires_semantic_review', executable=False))
+        interpretation = proposal.get("text")
+        records.append(
+            dict(
+                id="answer." + str(len(records)),
+                source="answer",
+                quote=quote,
+                text=quote,
+                interpretation=interpretation if isinstance(interpretation, str) else quote,
+                scope=scope,
+                polarity=polarity,
+                reference=proposal.get("reference"),
+                status="requires_semantic_review",
+                executable=False,
+            )
+        )
     return records
 
 
@@ -649,27 +791,27 @@ def evidence_context(ledger):
     for record in ledger:
         if not isinstance(record, dict):
             continue
-        label = str(record.get('id', 'unknown'))
-        scope = str(record.get('scope', 'unresolved'))
-        evidence = record.get('text', record.get('quote', ''))
-        lines.append(f'- [{label}; scope={scope}] {evidence}')
-    return '\n'.join(lines)
+        label = str(record.get("id", "unknown"))
+        scope = str(record.get("scope", "unresolved"))
+        evidence = record.get("text", record.get("quote", ""))
+        lines.append(f"- [{label}; scope={scope}] {evidence}")
+    return "\n".join(lines)
 
 
 def compatible_visible_signature(prompt, entry, arguments):
     if not isinstance(prompt, str) or not isinstance(entry, str) or not entry.isidentifier():
         return True
-    signatures = re.finditer(r'\bdef\s+' + re.escape(entry) + r'\s*\(', prompt)
+    signatures = re.finditer(r"\bdef\s+" + re.escape(entry) + r"\s*\(", prompt)
     for match in signatures:
-        tail = prompt[match.start():match.start() + 2048]
+        tail = prompt[match.start() : match.start() + 2048]
         depth = 0
         closing = None
         for token, offset in _tokens(tail):
             if token.type != tokenize.OP:
                 continue
-            if token.string == '(':
+            if token.string == "(":
                 depth += 1
-            elif token.string == ')':
+            elif token.string == ")":
                 depth -= 1
                 if depth == 0:
                     closing = offset
@@ -677,7 +819,7 @@ def compatible_visible_signature(prompt, entry, arguments):
         if closing is None:
             continue
         try:
-            parsed = ast.parse(tail[:closing] + ':\n    pass').body[0].args
+            parsed = ast.parse(tail[:closing] + ":\n    pass").body[0].args
         except LITERAL_FAILURES:
             continue
         maximum = len(parsed.posonlyargs) + len(parsed.args)
@@ -692,14 +834,14 @@ def compatible_visible_signature(prompt, entry, arguments):
 def selected_question_result(answer, context, example):
     if example is None or not isinstance(context, dict) or not isinstance(answer, str):
         return []
-    words = answer.strip().casefold().rstrip('.!').split()
-    words = [word for word in words if word not in {'the', 'result'}]
+    words = answer.strip().casefold().rstrip(".!").split()
+    words = [word for word in words if word not in {"the", "result"}]
     if len(words) != 1:
         return []
-    if words[0] in {'first', 'former'}:
+    if words[0] in {"first", "former"}:
         return [example]
-    choices = context.get('alternative_outputs')
-    if words[0] not in {'second', 'latter'} or not isinstance(choices, list) or len(choices) != 1:
+    choices = context.get("alternative_outputs")
+    if words[0] not in {"second", "latter"} or not isinstance(choices, list) or len(choices) != 1:
         return []
     try:
         value = ast.literal_eval(choices[0])
@@ -708,7 +850,7 @@ def selected_question_result(answer, context, example):
     return [(example[0], value)]
 
 
-ARGUMENT_ADAPTER = r'''
+ARGUMENT_ADAPTER = r"""
 def _compatible_call(function, exported_name):
     import functools
     import inspect
@@ -720,10 +862,10 @@ def _compatible_call(function, exported_name):
     return adapted
 
 {entry} = _compatible_call({entry}, {entry_name})
-'''
+"""
 
 
-EXECUTION_BODY = r'''
+EXECUTION_BODY = r"""
 import ast
 import copy
 import hashlib
@@ -913,21 +1055,31 @@ for source in CANDIDATES:
             except BaseException:
                 pass
 print('\n@@HARNESS@@' + json.dumps({'rows': observations, 'inputs': [render(x, 2000) for x in probe_inputs]}))
-'''
+"""
 
 
 def finish_program(code, entry, config=None):
     settings = config or {}
     if not isinstance(entry, str) or not entry.isidentifier():
         return code
-    if re.search(r'def\s+' + re.escape(entry) + r'\s*\(', code) is None:
+    if re.search(r"def\s+" + re.escape(entry) + r"\s*\(", code) is None:
         return code
-    if settings.get('call_adapter', False):
-        code = code.rstrip() + '\n' + ARGUMENT_ADAPTER.replace('{entry}', entry).replace('{entry_name}', repr(entry))
-    aliases = name_variants(entry) if settings.get('name_aliases', False) else []
+    if settings.get("call_adapter", False):
+        code = (
+            code.rstrip()
+            + "\n"
+            + ARGUMENT_ADAPTER.replace("{entry}", entry).replace("{entry_name}", repr(entry))
+        )
+    aliases = name_variants(entry) if settings.get("name_aliases", False) else []
     if aliases:
-        code = (code.rstrip() + '\n\nfor _exported_alias in ' + repr(aliases)
-                + ':\n    if _exported_alias not in globals():\n        globals()[_exported_alias] = ' + entry + '\n')
+        code = (
+            code.rstrip()
+            + "\n\nfor _exported_alias in "
+            + repr(aliases)
+            + ":\n    if _exported_alias not in globals():\n        globals()[_exported_alias] = "
+            + entry
+            + "\n"
+        )
     return code
 
 
@@ -950,6 +1102,7 @@ def execution_script(codes, entry, checks, probe_code, props=(), config=None):
     if any(type(item) is not str or len(item) > 2000 for item in properties):
         raise ValueError("Properties must be bounded expression strings")
     remaining, active = [20000], set()
+
     def require_literal(value, depth=0):
         remaining[0] -= 1
         if depth > 40 or remaining[0] < 0:
@@ -974,6 +1127,7 @@ def execution_script(codes, entry, checks, probe_code, props=(), config=None):
                 require_literal(child, depth + 1)
         finally:
             active.remove(id(value))
+
     normalized = []
     for assertion in assertions:
         if type(assertion) not in (list, tuple) or len(assertion) != 2:
@@ -984,9 +1138,13 @@ def execution_script(codes, entry, checks, probe_code, props=(), config=None):
         require_literal(arguments)
         require_literal(expected)
         normalized.append((tuple(arguments), expected))
-    fields = dict(PROBE_CODE=probe_source,
-                  CANDIDATES=[finish_program(source, entry, config) for source in programs],
-                  ENTRY=entry, CHECKS=normalized, PROPS=properties)
+    fields = dict(
+        PROBE_CODE=probe_source,
+        CANDIDATES=[finish_program(source, entry, config) for source in programs],
+        ENTRY=entry,
+        CHECKS=normalized,
+        PROPS=properties,
+    )
     declarations = ["{} = {!r}".format(name, value) for name, value in fields.items()]
     return "\n".join(declarations) + "\n" + EXECUTION_BODY
 
@@ -995,58 +1153,76 @@ def _unique_report_fields(pairs):
     result = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError('duplicate report field')
+            raise ValueError("duplicate report field")
         result[key] = value
     return result
 
 
 def parse_execution_output(output, expected_count):
-    if type(output) is not str or len(output) > 2000000 or type(expected_count) is not int or expected_count < 0:
+    if (
+        type(output) is not str
+        or len(output) > 2000000
+        or type(expected_count) is not int
+        or expected_count < 0
+    ):
         return None
-    lines = [line[len('@@HARNESS@@'):] for line in output.splitlines() if line.startswith('@@HARNESS@@')]
+    lines = [
+        line[len("@@HARNESS@@") :] for line in output.splitlines() if line.startswith("@@HARNESS@@")
+    ]
     try:
         result = json.loads(lines[-1], object_pairs_hook=_unique_report_fields)
     except (IndexError, TypeError, ValueError, RecursionError):
         return None
-    if type(result) is not dict or set(result) != {'rows', 'inputs'}:
+    if type(result) is not dict or set(result) != {"rows", "inputs"}:
         return None
-    rows, inputs = result['rows'], result['inputs']
+    rows, inputs = result["rows"], result["inputs"]
     if type(rows) is not list or len(rows) != expected_count:
         return None
-    if type(inputs) is not list or len(inputs) > 10 or any(type(x) is not str or len(x) > 2000 for x in inputs):
+    if (
+        type(inputs) is not list
+        or len(inputs) > 10
+        or any(type(x) is not str or len(x) > 2000 for x in inputs)
+    ):
         return None
     check_count = None
     for row in rows:
-        if type(row) is not dict or set(row) != {'load', 'checks', 'probes', 'props'}:
+        if type(row) is not dict or set(row) != {"load", "checks", "probes", "props"}:
             return None
-        if type(row['load']) is not bool or type(row['props']) is not int or row['props'] < 0:
+        if type(row["load"]) is not bool or type(row["props"]) is not int or row["props"] < 0:
             return None
-        if type(row['checks']) is not list or type(row['probes']) is not list:
+        if type(row["checks"]) is not list or type(row["probes"]) is not list:
             return None
-        if any(type(x) is not list or len(x) != 2 or type(x[0]) is not bool or type(x[1]) is not str or len(x[1]) > 120 for x in row['checks']):
+        if any(
+            type(x) is not list
+            or len(x) != 2
+            or type(x[0]) is not bool
+            or type(x[1]) is not str
+            or len(x[1]) > 120
+            for x in row["checks"]
+        ):
             return None
-        for item in row['probes']:
+        for item in row["probes"]:
             if type(item) is not list or len(item) != 3 or any(type(x) is not str for x in item):
                 return None
             status, digest, shown = item
-            if status not in ('ok', 'raises', 'skipped') or len(shown) > 150:
+            if status not in ("ok", "raises", "skipped") or len(shown) > 150:
                 return None
-            if status == 'ok' and re.fullmatch(r'[0-9a-f]{64}', digest) is None:
+            if status == "ok" and re.fullmatch(r"[0-9a-f]{64}", digest) is None:
                 return None
-            if status == 'raises' and (not digest.isidentifier() or shown):
+            if status == "raises" and (not digest.isidentifier() or shown):
                 return None
-            if status == 'skipped' and (digest or shown):
+            if status == "skipped" and (digest or shown):
                 return None
-        if row['load']:
-            if row['checks'] or row['probes'] or row['props']:
+        if row["load"]:
+            if row["checks"] or row["probes"] or row["props"]:
                 return None
         else:
-            if len(row['probes']) != len(inputs):
+            if len(row["probes"]) != len(inputs):
                 return None
-            if check_count is not None and len(row['checks']) != check_count:
+            if check_count is not None and len(row["checks"]) != check_count:
                 return None
-            check_count = len(row['checks'])
-        if row['props'] and not any(x[0] == 'ok' for x in row['probes']):
+            check_count = len(row["checks"])
+        if row["props"] and not any(x[0] == "ok" for x in row["probes"]):
             return None
     return result
 
@@ -1061,18 +1237,23 @@ def execute_candidates(env, codes, entry, checks, probe_code, props=(), config=N
         return None
     result = parse_execution_output(output, len(codes))
     if result is not None:
-        for row in result['rows']:
-            if not row['load'] and len(row['checks']) != len(checks):
+        for row in result["rows"]:
+            if not row["load"] and len(row["checks"]) != len(checks):
                 return None
-            if row['props'] > len(props) * sum(x[0] == 'ok' for x in row['probes']):
+            if row["props"] > len(props) * sum(x[0] == "ok" for x in row["probes"]):
                 return None
     return result
 
 
 class EvidenceGuidedRepairClarifier(_AlgorithmBase):
     DEFAULT_CONFIG = {
-        "drafts": 3, "finals": 3, "probes": 8, "repairs": 2,
-        "review": True, "call_adapter": False, "name_aliases": False,
+        "drafts": 3,
+        "finals": 3,
+        "probes": 8,
+        "repairs": 2,
+        "review": True,
+        "call_adapter": False,
+        "name_aliases": False,
         "clean_contradictions": False,
     }
     DEFAULT_POLICY = {
@@ -1089,15 +1270,15 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
         if config is not None:
             for name, value in dict(config).items():
                 if name not in settings:
-                    raise ValueError(f'Unsupported configuration field: {name}')
+                    raise ValueError(f"Unsupported configuration field: {name}")
                 settings[name] = value
-        for name in ('drafts', 'finals', 'probes', 'repairs'):
-            minimum = 1 if name in ('drafts', 'finals') else 0
+        for name in ("drafts", "finals", "probes", "repairs"):
+            minimum = 1 if name in ("drafts", "finals") else 0
             if type(settings[name]) is not int or settings[name] < minimum:
-                raise ValueError(f'{name} must be an integer >= {minimum}')
-        for name in ('review', 'call_adapter', 'name_aliases', 'clean_contradictions'):
+                raise ValueError(f"{name} must be an integer >= {minimum}")
+        for name in ("review", "call_adapter", "name_aliases", "clean_contradictions"):
             if type(settings[name]) is not bool:
-                raise ValueError(f'{name} must be boolean')
+                raise ValueError(f"{name} must be boolean")
         self.config = settings
         self.policy = self.DEFAULT_POLICY.copy()
         self.artifacts = dict()
@@ -1115,8 +1296,14 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
         records = []
         for index, pair in enumerate(checks):
             arguments, expected = pair
-            records.append(dict(index=index, args=repr(arguments), expected=repr(expected),
-                                binding=index in binding))
+            records.append(
+                dict(
+                    index=index,
+                    args=repr(arguments),
+                    expected=repr(expected),
+                    binding=index in binding,
+                )
+            )
         return records
 
     @staticmethod
@@ -1137,8 +1324,9 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
         self.artifacts.setdefault("calls", []).append(event)
         try:
             available = {"prompt_cost": env.prompt_cost, "prompt_budget": env.prompt_budget}
-            event["budget"] = {name: self.budget_observation(value)
-                               for name, value in available.items()}
+            event["budget"] = {
+                name: self.budget_observation(value) for name, value in available.items()
+            }
             ledger = self.artifacts.setdefault("public_budget_observations", [])
             for name, value in event["budget"].items():
                 ledger.append({"attribute": name, "value": copy.deepcopy(value)})
@@ -1175,26 +1363,36 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
         if attempted_format_recovery:
             conversation = copy.deepcopy(messages)
             conversation.append({"role": "assistant", "content": response})
-            conversation.append({"role": "user", "content":
-                "The previous response did not provide a parseable implementation. "
-                "Supply Python source defining " + entry +
-                " with the requested behavior. Include no surrounding explanation."})
+            conversation.append(
+                {
+                    "role": "user",
+                    "content": "The previous response did not provide a parseable implementation. "
+                    "Supply Python source defining "
+                    + entry
+                    + " with the requested behavior. Include no surrounding explanation.",
+                }
+            )
             replacement = self.complete(env, conversation, stage=stage + ".format")
             extracted = extract_code(replacement, entry, declared)
         program = sanitize(extracted) if extracted else None
         if program == "":
             program = None
-        audit = dict(id=stage, code=program, usable=program is not None,
-                     sha256=None if program is None else self.digest(program),
-                     format_recovery_attempted=attempted_format_recovery)
+        audit = dict(
+            id=stage,
+            code=program,
+            usable=program is not None,
+            sha256=None if program is None else self.digest(program),
+            format_recovery_attempted=attempted_format_recovery,
+        )
         self.artifacts.setdefault("candidates", []).append(audit)
         return program
 
     def finish(self, code, entry):
         if type(code) is not str or type(entry) is not str or not entry.isidentifier():
             raise ValueError("Finishing requires source text and a valid entry-point name")
-        enabled = {option: self.config.get(option, False)
-                   for option in ("call_adapter", "name_aliases")}
+        enabled = {
+            option: self.config.get(option, False) for option in ("call_adapter", "name_aliases")
+        }
         return finish_program(code, entry, enabled)
 
     def execute(self, env, codes, entry, checks, probe_code, props=(), stage="execution"):
@@ -1202,9 +1400,15 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
         if not programs:
             return None
         script = execution_script(programs, entry, assertions, probe_code, properties, self.config)
-        event = dict(stage=stage, script=script, script_sha256=self.digest(script),
-                     finished_candidates=[self.finish(program, entry) for program in programs],
-                     raw=None, result=None, status="pending")
+        event = dict(
+            stage=stage,
+            script=script,
+            script_sha256=self.digest(script),
+            finished_candidates=[self.finish(program, entry) for program in programs],
+            raw=None,
+            result=None,
+            status="pending",
+        )
         self.artifacts.setdefault("executions", []).append(event)
         try:
             event["raw"] = env.exec_code(script)
@@ -1222,47 +1426,70 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
                 if not valid_checks or row["props"] > len(properties) * successful_probes:
                     result = None
                     break
-        event.update(result=copy.deepcopy(result), status="returned" if result is not None else "invalid_report")
+        event.update(
+            result=copy.deepcopy(result),
+            status="returned" if result is not None else "invalid_report",
+        )
         return result
 
     @staticmethod
     def passed(row, indices):
-        checks = row.get('checks', [])
+        checks = row.get("checks", [])
         admitted = {index for index in indices if type(index) is int and 0 <= index < len(checks)}
-        return sum(isinstance(checks[index], (list, tuple)) and len(checks[index]) == 2
-                   and checks[index][0] is True for index in admitted)
+        return sum(
+            isinstance(checks[index], (list, tuple))
+            and len(checks[index]) == 2
+            and checks[index][0] is True
+            for index in admitted
+        )
 
     @staticmethod
     def output_vector(row, candidate_index):
-        probes = row.get('probes', [])
-        if row.get('load') or not probes or any(len(probe) != 3 or probe[0] != 'ok' for probe in probes):
-            return ('unobserved', candidate_index)
-        return ('observed', tuple(probe[1] for probe in probes))
+        probes = row.get("probes", [])
+        if (
+            row.get("load")
+            or not probes
+            or any(len(probe) != 3 or probe[0] != "ok" for probe in probes)
+        ):
+            return ("unobserved", candidate_index)
+        return ("observed", tuple(probe[1] for probe in probes))
 
     def agreement(self, rows, candidate_index):
         signature = self.output_vector(rows[candidate_index], candidate_index)
-        if signature[0] != 'observed':
+        if signature[0] != "observed":
             return 0
         return sum(self.output_vector(row, index) == signature for index, row in enumerate(rows))
 
     def rank(self, rows, hard, soft, stage="selection"):
         if not rows:
-            raise ValueError('Cannot select from an empty candidate set')
+            raise ValueError("Cannot select from an empty candidate set")
         binding = {index for index in hard if type(index) is int and index >= 0}
         advisory = {index for index in soft if type(index) is int and index >= 0} - binding
         scores = []
         for index, row in enumerate(rows):
-            if row.get('load'):
+            if row.get("load"):
                 score = (-1, -1, -1, -1, -index)
             else:
-                properties = row.get('props', 0)
+                properties = row.get("props", 0)
                 properties = properties if type(properties) is int and properties >= 0 else 0
-                score = (self.passed(row, binding), self.passed(row, advisory), properties,
-                         self.agreement(rows, index), -index)
+                score = (
+                    self.passed(row, binding),
+                    self.passed(row, advisory),
+                    properties,
+                    self.agreement(rows, index),
+                    -index,
+                )
             scores.append(score)
         winner = sorted(range(len(rows)), key=lambda index: scores[index], reverse=True)[0]
-        self.artifacts.setdefault('selections', []).append({'stage': stage, 'scores': scores,
-            'selected_index': winner, 'binding_indices': sorted(binding), 'advisory_indices': sorted(advisory)})
+        self.artifacts.setdefault("selections", []).append(
+            {
+                "stage": stage,
+                "scores": scores,
+                "selected_index": winner,
+                "binding_indices": sorted(binding),
+                "advisory_indices": sorted(advisory),
+            }
+        )
         return winner
 
     @staticmethod
@@ -1290,15 +1517,23 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
                 else:
                     columns.append("not observed")
             suffix = " (drafts disagree)" if len(outcomes) > 1 else ""
-            lines.append(str(index + 1) + ". " + call_text(entry, arguments)
-                         + " -> " + " | ".join(columns) + suffix)
+            lines.append(
+                str(index + 1)
+                + ". "
+                + call_text(entry, arguments)
+                + " -> "
+                + " | ".join(columns)
+                + suffix
+            )
         return "\n".join(lines)
 
     def question(self, env, prompt, entry, anchor, result, anchor_row):
         # A witness is useful only when both its arguments and observed value can
         # be represented literally. Probe agreement itself is never evidence.
         snapshots = result or {}
-        observations = [] if not anchor_row or anchor_row.get("load") else anchor_row.get("probes", [])
+        observations = (
+            [] if not anchor_row or anchor_row.get("load") else anchor_row.get("probes", [])
+        )
         witnesses = []
         for position, raw_arguments in enumerate(snapshots.get("inputs", [])):
             if position >= len(observations):
@@ -1327,52 +1562,93 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
                 except (SyntaxError, ValueError, TypeError):
                     continue
                 distinct.setdefault(outcome[2], None)
-            witnesses.append({"probe_index": position, "call": call_text(entry, raw_arguments),
-                "actual_output": observation[2], "check": (arguments, value),
-                "alternatives": list(distinct)})
-        chosen = next((w for w in witnesses if w["alternatives"]), witnesses[0] if witnesses else None)
-        context = {"anchor_sha256": self.digest(anchor),
-            "draft_and_outputs": "Visible task:\n" + prompt + "\nCandidate:\n" + anchor
-                + "\nObserved executions (anchor first):\n" + self.probe_table(result, entry),
-            "alternative_outputs": [], "example": None,
-            "domain_validation": "generated_predicate_and_visible_signature_not_a_proof"}
+            witnesses.append(
+                {
+                    "probe_index": position,
+                    "call": call_text(entry, raw_arguments),
+                    "actual_output": observation[2],
+                    "check": (arguments, value),
+                    "alternatives": list(distinct),
+                }
+            )
+        chosen = next(
+            (w for w in witnesses if w["alternatives"]), witnesses[0] if witnesses else None
+        )
+        context = {
+            "anchor_sha256": self.digest(anchor),
+            "draft_and_outputs": "Visible task:\n"
+            + prompt
+            + "\nCandidate:\n"
+            + anchor
+            + "\nObserved executions (anchor first):\n"
+            + self.probe_table(result, entry),
+            "alternative_outputs": [],
+            "example": None,
+            "domain_validation": "generated_predicate_and_visible_signature_not_a_proof",
+        }
         if chosen is None:
             fallback_messages = [
                 {"role": "system", "content": FALLBACK_ASK},
-                {"role": "user", "content": "Visible task:\n" + prompt + "\nCandidate:\n" + anchor
+                {
+                    "role": "user",
+                    "content": "Visible task:\n"
+                    + prompt
+                    + "\nCandidate:\n"
+                    + anchor
                     + "\nThere is no admissible executed example. Choose one unresolved behavior to ask about; "
-                      "do not claim any unobserved result."}]
+                    "do not claim any unobserved result.",
+                },
+            ]
             wording = self.complete(env, fallback_messages, "contract.fallback")
             check = None
         else:
-            context["example"] = {key: chosen[key] for key in ("probe_index", "call", "actual_output")}
+            context["example"] = {
+                key: chosen[key] for key in ("probe_index", "call", "actual_output")
+            }
             context["alternative_outputs"] = chosen["alternatives"][:1]
             check = chosen["check"]
             if context["alternative_outputs"]:
-                wording = (f"For the single call {chosen['call']}, I observed {chosen['actual_output']} "
+                wording = (
+                    f"For the single call {chosen['call']}, I observed {chosen['actual_output']} "
                     f"from one candidate and {context['alternative_outputs'][0]} from another. "
-                    "What is the intended return value for this call?")
+                    "What is the intended return value for this call?"
+                )
             else:
-                wording = (f"For the single call {chosen['call']}, the candidate returned {chosen['actual_output']}. "
-                    "What is the intended return value for this call?")
+                wording = (
+                    f"For the single call {chosen['call']}, the candidate returned {chosen['actual_output']}. "
+                    "What is the intended return value for this call?"
+                )
         self.artifacts["question_context"] = context
         return clean_question(wording), check
 
-
     def initial_state(self, env, prompt, entry, declared, examples):
-        draft_messages = self.code_messages(json.dumps(dict(prompt=prompt, entry_point=entry), ensure_ascii=False))
+        draft_messages = self.code_messages(
+            json.dumps(dict(prompt=prompt, entry_point=entry), ensure_ascii=False)
+        )
         probe_instruction = PROBE.format(num_probes=int(self.config["probes"]), entry_point=entry)
         tasks = [("draft." + str(n), draft_messages) for n in range(int(self.config["drafts"]))]
-        tasks += [("probes.before_answer", [dict(role="system", content=probe_instruction),
-                                             dict(role="user", content=prompt)])]
-        responses = dict(zip((label for label, _ in tasks), self.sequential_calls(env, tasks)))
+        tasks += [
+            (
+                "probes.before_answer",
+                [dict(role="system", content=probe_instruction), dict(role="user", content=prompt)],
+            )
+        ]
+        responses = dict(
+            zip((label for label, _ in tasks), self.sequential_calls(env, tasks), strict=False)
+        )
         programs = []
         for label, _ in tasks[:-1]:
-            parsed = self.program_from_response(env, responses.get(label, ""), draft_messages, entry, declared, label)
+            parsed = self.program_from_response(
+                env, responses.get(label, ""), draft_messages, entry, declared, label
+            )
             if parsed:
                 programs.append(parsed)
         probes = extract_fenced_code(responses.get("probes.before_answer", ""))
-        batch = self.execute(env, programs, entry, examples, probes, stage="drafts") if programs else None
+        batch = (
+            self.execute(env, programs, entry, examples, probes, stage="drafts")
+            if programs
+            else None
+        )
         winner = 0
         if batch:
             winner = self.rank(batch["rows"], [], list(range(len(examples))), "anchor")
@@ -1382,28 +1658,37 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
         if batch:
             row_order = [winner, *[n for n in range(len(programs)) if n != winner]]
             batch = dict(batch, rows=[batch["rows"][n] for n in row_order])
-        self.artifacts["anchor"] = dict(code=chosen, sha256=self.digest(chosen),
-            draft_index=winner, fallback_stub=not programs)
-        return dict(drafts=programs, anchor=chosen, anchor_index=winner, execution=batch,
-                    probe_code=probes, probe_system=probe_instruction)
-
+        self.artifacts["anchor"] = dict(
+            code=chosen, sha256=self.digest(chosen), draft_index=winner, fallback_stub=not programs
+        )
+        return dict(
+            drafts=programs,
+            anchor=chosen,
+            anchor_index=winner,
+            execution=batch,
+            probe_code=probes,
+            probe_system=probe_instruction,
+        )
 
     def compile_checks(self, answer, entry, declared, example_check, examples, compiled):
-        question = self.artifacts.get('qa', {}).get('question') or ''
-        context = self.artifacts.get('question_context') or {}
+        question = self.artifacts.get("qa", {}).get("question") or ""
+        context = self.artifacts.get("question_context") or {}
         names = list(dict.fromkeys(name for name in (entry, declared) if name))
         references = []
         for name in names:
-            for arguments, offset in literal_calls(question, name):
+            for arguments, _offset in literal_calls(question, name):
                 if not stated_in(references, arguments, None):
                     references.append((arguments, None))
         anchor = example_check if len(references) < 2 else None
         proposals = answer_relations(answer, names)
         proposals.extend(reference_relation(answer, anchor))
         proposals.extend(selected_question_result(answer, context, anchor))
-        if (anchor is not None and explicit_example_confirmation(answer)
-                and not context.get('alternative_outputs')
-                and not re.search(r'\b(?:first|second|former|latter)\b', str(answer), re.I)):
+        if (
+            anchor is not None
+            and explicit_example_confirmation(answer)
+            and not context.get("alternative_outputs")
+            and not re.search(r"\b(?:first|second|former|latter)\b", str(answer), re.I)
+        ):
             proposals.append(anchor)
         distinct = []
         for arguments, expected in proposals:
@@ -1412,12 +1697,20 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
         conflicts = []
         binding = []
         for arguments, expected in distinct:
-            others = [(args, value) for args, value in distinct
-                      if stated_in([(args, None)], arguments, None)
-                      and not stated_in([(args, value)], arguments, expected)]
+            others = [
+                (args, value)
+                for args, value in distinct
+                if stated_in([(args, None)], arguments, None)
+                and not stated_in([(args, value)], arguments, expected)
+            ]
             if others:
-                conflicts.append({'args': repr(arguments), 'expected': repr(expected),
-                                  'status': 'unresolved_answer_conflict'})
+                conflicts.append(
+                    {
+                        "args": repr(arguments),
+                        "expected": repr(expected),
+                        "status": "unresolved_answer_conflict",
+                    }
+                )
             else:
                 binding.append((arguments, expected))
         retained = list(binding)
@@ -1426,7 +1719,7 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
             args, expected = original
             correction = [check for check in binding if stated_in([(check[0], None)], args, None)]
             if correction and not stated_in(correction, args, expected):
-                superseded.append({'check': repr(original), 'reason': 'explicit_answer_same_input'})
+                superseded.append({"check": repr(original), "reason": "explicit_answer_same_input"})
             elif not stated_in(retained, args, expected):
                 retained.append(original)
         hard = list(range(len(binding)))
@@ -1434,74 +1727,158 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
         records = self.evidence_records(retained, hard)
         ledger = constraint_ledger(answer, compiled, question, example_check)
         for record in records:
-            source = 'answer' if record['binding'] else 'original_prompt'
-            record.update(source=source, scope='exact_call', polarity='require', status='retained')
-            ledger.append({'id': f"check.{record['index']}", 'source': source,
-                'quote': str(answer) if record['binding'] else self.artifacts.get('original_prompt', ''),
-                'text': f"{record['args']} -> {record['expected']}", 'scope': 'example',
-                'polarity': 'require', 'status': 'binding' if record['binding'] else 'source_example',
-                'executable': True})
-        self.artifacts.update(constraint_ledger=ledger, checks=records, properties=[],
-            superseded_examples=superseded, unresolved_answer_conflicts=conflicts,
-            unverified_compiler_suggestions=copy.deepcopy(compiled))
+            source = "answer" if record["binding"] else "original_prompt"
+            record.update(source=source, scope="exact_call", polarity="require", status="retained")
+            ledger.append(
+                {
+                    "id": f"check.{record['index']}",
+                    "source": source,
+                    "quote": str(answer)
+                    if record["binding"]
+                    else self.artifacts.get("original_prompt", ""),
+                    "text": f"{record['args']} -> {record['expected']}",
+                    "scope": "example",
+                    "polarity": "require",
+                    "status": "binding" if record["binding"] else "source_example",
+                    "executable": True,
+                }
+            )
+        self.artifacts.update(
+            constraint_ledger=ledger,
+            checks=records,
+            properties=[],
+            superseded_examples=superseded,
+            unresolved_answer_conflicts=conflicts,
+            unverified_compiler_suggestions=copy.deepcopy(compiled),
+        )
         return retained, hard, soft, []
 
-    def final_state(self, env, prompt, entry, declared, examples, question, answer, example_check, initial):
-        visible_examples = [f"{call_text(entry, repr(tuple(args)))} -> {value!r}" for args, value in examples]
-        compilation_input = "\n".join(["Original requirement:", prompt, "Asked:", question,
-            "Actual answer:", answer, "Source examples:", *visible_examples])
-        response = self.complete(env, [dict(role="system", content=COMPILE),
-            dict(role="user", content=compilation_input)], "answer.compile")
-        suggestions = read_block_values(response, {"CONFIRMS", "CALLS", "PROPERTIES", "EXAMPLES", "CONSTRAINTS"})
+    def final_state(
+        self, env, prompt, entry, declared, examples, question, answer, example_check, initial
+    ):
+        visible_examples = [
+            f"{call_text(entry, repr(tuple(args)))} -> {value!r}" for args, value in examples
+        ]
+        compilation_input = "\n".join(
+            [
+                "Original requirement:",
+                prompt,
+                "Asked:",
+                question,
+                "Actual answer:",
+                answer,
+                "Source examples:",
+                *visible_examples,
+            ]
+        )
+        response = self.complete(
+            env,
+            [dict(role="system", content=COMPILE), dict(role="user", content=compilation_input)],
+            "answer.compile",
+        )
+        suggestions = read_block_values(
+            response, {"CONFIRMS", "CALLS", "PROPERTIES", "EXAMPLES", "CONSTRAINTS"}
+        )
         checks, binding, provisional, properties = self.compile_checks(
-            answer, entry, declared, example_check, examples, suggestions)
+            answer, entry, declared, example_check, examples, suggestions
+        )
         self.artifacts["compiled_evidence"] = {"response": response}
         ledger = evidence_context(self.artifacts["constraint_ledger"])
-        exact = [f"{call_text(entry, repr(tuple(checks[n][0])))} == {checks[n][1]!r}" for n in binding]
+        exact = [
+            f"{call_text(entry, repr(tuple(checks[n][0])))} == {checks[n][1]!r}" for n in binding
+        ]
         evidence_text = "\nScoped evidence, read with the actual question and answer:\n" + ledger
         if exact:
             evidence_text += "\nRequired exact calls:\n" + "\n".join(exact)
-        generation = self.code_messages(FINAL.format(prompt=prompt, entry=entry,
-            question=question, answer=answer, obligations=evidence_text))
+        generation = self.code_messages(
+            FINAL.format(
+                prompt=prompt,
+                entry=entry,
+                question=question,
+                answer=answer,
+                obligations=evidence_text,
+            )
+        )
         labels = ["final." + str(n) for n in range(int(self.config["finals"]))]
         tasks = [(label, generation) for label in labels]
-        tasks += [("probes.after_answer", [dict(role="system", content=initial["probe_system"]),
-            dict(role="user", content="\n".join([prompt, "Asked:", question, "Actual answer:", answer]))])]
-        replies = dict(zip((label for label, _ in tasks), self.sequential_calls(env, tasks)))
+        tasks += [
+            (
+                "probes.after_answer",
+                [
+                    dict(role="system", content=initial["probe_system"]),
+                    dict(
+                        role="user",
+                        content="\n".join([prompt, "Asked:", question, "Actual answer:", answer]),
+                    ),
+                ],
+            )
+        ]
+        replies = dict(
+            zip((label for label, _ in tasks), self.sequential_calls(env, tasks), strict=False)
+        )
         candidates = []
         for label in labels:
-            candidate = self.program_from_response(env, replies.get(label, ""), generation, entry, declared, label)
+            candidate = self.program_from_response(
+                env, replies.get(label, ""), generation, entry, declared, label
+            )
             if candidate:
                 candidates.append(candidate)
         if not candidates:
             candidates.append(initial["anchor"])
-        probes = extract_fenced_code(replies.get("probes.after_answer", "")) or initial["probe_code"]
+        probes = (
+            extract_fenced_code(replies.get("probes.after_answer", "")) or initial["probe_code"]
+        )
         execution = self.execute(env, candidates, entry, checks, probes, properties, "finals")
         satisfies_binding = execution and any(
-            not row["load"] and self.passed(row, binding) == len(binding) for row in execution["rows"])
+            not row["load"] and self.passed(row, binding) == len(binding)
+            for row in execution["rows"]
+        )
         if binding and execution and not satisfies_binding:
-            rescue_context = self.code_messages(FINAL.format(prompt=prompt, entry=entry,
-                question=question, answer=answer,
-                obligations=OBLIGATIONS.format(lines="\n".join(exact) + "\n" + ledger)))
+            rescue_context = self.code_messages(
+                FINAL.format(
+                    prompt=prompt,
+                    entry=entry,
+                    question=question,
+                    answer=answer,
+                    obligations=OBLIGATIONS.format(lines="\n".join(exact) + "\n" + ledger),
+                )
+            )
             rescue_reply = self.complete(env, rescue_context, "rescue")
-            replacement = self.program_from_response(env, rescue_reply, rescue_context, entry, declared, "rescue")
+            replacement = self.program_from_response(
+                env, rescue_reply, rescue_context, entry, declared, "rescue"
+            )
             if replacement:
                 expanded = [*candidates, replacement]
                 retrial = self.execute(env, expanded, entry, checks, probes, properties, "rescue")
                 if retrial:
                     candidates, execution = expanded, retrial
-        self.artifacts.update(dropped_provisional_indices=[], active_checks=self.evidence_records(checks, binding))
+        self.artifacts.update(
+            dropped_provisional_indices=[], active_checks=self.evidence_records(checks, binding)
+        )
         winner = self.rank(execution["rows"], binding, provisional, "final") if execution else 0
-        return dict(code=candidates[winner], status=execution["rows"][winner]["checks"] if execution else None,
-                    checks=checks, hard=binding, messages=generation)
-
+        return dict(
+            code=candidates[winner],
+            status=execution["rows"][winner]["checks"] if execution else None,
+            checks=checks,
+            hard=binding,
+            messages=generation,
+        )
 
     @staticmethod
     def keeps_binding(previous, current, hard):
-        required = {index for index in hard if type(index) is int and 0 <= index < len(previous)
-                    and len(previous[index]) == 2 and previous[index][0] is True}
-        survived = {index for index, item in enumerate(current)
-                    if isinstance(item, (tuple, list)) and len(item) == 2 and item[0] is True}
+        required = {
+            index
+            for index in hard
+            if type(index) is int
+            and 0 <= index < len(previous)
+            and len(previous[index]) == 2
+            and previous[index][0] is True
+        }
+        survived = {
+            index
+            for index, item in enumerate(current)
+            if isinstance(item, (tuple, list)) and len(item) == 2 and item[0] is True
+        }
         return required <= survived
 
     def correct(self, env, state, prompt, entry, declared, question, answer):
@@ -1516,14 +1893,22 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
             observed = execution["rows"][0]["checks"]
             before = sum(bool(item[0]) for item in (results or []))
             after = sum(bool(item[0]) for item in observed)
-            preserved = len(observed) == len(checks) and self.keeps_binding(results or [], observed, binding)
-            details = dict(candidate_sha256=self.digest(candidate), preserves_binding=preserved,
-                           before_passes=before, after_passes=after)
+            preserved = len(observed) == len(checks) and self.keeps_binding(
+                results or [], observed, binding
+            )
+            details = dict(
+                candidate_sha256=self.digest(candidate),
+                preserves_binding=preserved,
+                before_passes=before,
+                after_passes=after,
+            )
             admissible = preserved and (after > before if require_progress else after >= before)
             if not admissible:
                 details["reason"] = "binding_loss_or_insufficient_passes"
                 return None, details
-            if not self.semantic_guard(env, candidate, prompt, entry, question, answer, stage + ".guard"):
+            if not self.semantic_guard(
+                env, candidate, prompt, entry, question, answer, stage + ".guard"
+            ):
                 details["reason"] = "semantic_veto"
                 return None, details
             return observed, details
@@ -1536,13 +1921,25 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
             diagnostic = []
             for n in failures[:4]:
                 arguments, expected = checks[n]
-                diagnostic.append(f"- {call_text(entry, repr(tuple(arguments)))}: required {expected!r}; observed {results[n][1]}")
-            messages = [*state["messages"], dict(role="assistant", content="```python\n" + selected + "\n```"),
-                        dict(role="user", content=REPAIR.format(failures="\n".join(diagnostic)))]
+                diagnostic.append(
+                    f"- {call_text(entry, repr(tuple(arguments)))}: required {expected!r}; observed {results[n][1]}"
+                )
+            messages = [
+                *state["messages"],
+                dict(role="assistant", content="```python\n" + selected + "\n```"),
+                dict(role="user", content=REPAIR.format(failures="\n".join(diagnostic))),
+            ]
             stage = "repair." + str(number)
-            audit = dict(round=number, failed_indices=failures, before_sha256=self.digest(selected), accepted=False)
+            audit = dict(
+                round=number,
+                failed_indices=failures,
+                before_sha256=self.digest(selected),
+                accepted=False,
+            )
             self.artifacts.setdefault("repairs", []).append(audit)
-            candidate = self.program_from_response(env, self.complete(env, messages, stage), messages, entry, declared, stage)
+            candidate = self.program_from_response(
+                env, self.complete(env, messages, stage), messages, entry, declared, stage
+            )
             if not candidate:
                 audit["reason"] = "unusable_program"
                 break
@@ -1554,12 +1951,21 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
             audit.update(accepted=True, reason="binding_preserved_and_pass_count_increased")
         if not self.config["review"]:
             return selected
-        review_input = REVIEW.format(prompt=prompt, question=question, answer=answer, entry=entry, code=selected)
-        review_input += "\nScoped evidence:\n" + evidence_context(self.artifacts.get("constraint_ledger", []))
+        review_input = REVIEW.format(
+            prompt=prompt, question=question, answer=answer, entry=entry, code=selected
+        )
+        review_input += "\nScoped evidence:\n" + evidence_context(
+            self.artifacts.get("constraint_ledger", [])
+        )
         response = self.complete(env, [dict(role="user", content=review_input)], "review")
         clear = response.strip().upper() == "OK"
-        audit = dict(response=response, before_sha256=self.digest(selected), accepted=False,
-                     status="no_contradiction_found" if clear else "unresolved", kind="model_review_not_proof")
+        audit = dict(
+            response=response,
+            before_sha256=self.digest(selected),
+            accepted=False,
+            status="no_contradiction_found" if clear else "unresolved",
+            kind="model_review_not_proof",
+        )
         self.artifacts["review"] = audit
         if clear or not response:
             return selected
@@ -1574,40 +1980,79 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
             audit.update(accepted=True, status="revised_and_reviewed")
         return selected
 
-
     def semantic_guard(self, env, code, prompt, entry, question, answer, stage):
-        sections = [REVIEW.format(prompt=prompt, question=question, answer=answer, entry=entry, code=code),
-                    "Scoped evidence:", evidence_context(self.artifacts.get("constraint_ledger", []))]
+        sections = [
+            REVIEW.format(prompt=prompt, question=question, answer=answer, entry=entry, code=code),
+            "Scoped evidence:",
+            evidence_context(self.artifacts.get("constraint_ledger", [])),
+        ]
         verdict = self.complete(env, [dict(role="user", content="\n".join(sections))], stage)
-        audit = dict(stage=stage, response=verdict, code_sha256=self.digest(code),
-                     kind="model_review_not_proof", accepted=verdict.strip().casefold() == "ok")
+        audit = dict(
+            stage=stage,
+            response=verdict,
+            code_sha256=self.digest(code),
+            kind="model_review_not_proof",
+            accepted=verdict.strip().casefold() == "ok",
+        )
         self.artifacts.setdefault("semantic_guards", []).append(audit)
         return audit["accepted"]
-
 
     def deliver(self, code, entry, branch):
         output = self.finish(code, entry)
         origin = self.artifacts.get("anchor", {})
-        parsed_candidate = any(record.get("usable") and record.get("code") == code
-                               for record in self.artifacts.get("candidates", []))
-        selection = dict(branch=branch, code=code, finished_code=output,
-            fallback_stub=bool(origin.get("fallback_stub") and origin.get("code") == code and not parsed_candidate))
+        parsed_candidate = any(
+            record.get("usable") and record.get("code") == code
+            for record in self.artifacts.get("candidates", [])
+        )
+        selection = dict(
+            branch=branch,
+            code=code,
+            finished_code=output,
+            fallback_stub=bool(
+                origin.get("fallback_stub") and origin.get("code") == code and not parsed_candidate
+            ),
+        )
         for source, target in (("code", "sha256"), ("finished_code", "finished_sha256")):
             selection[target] = self.digest(selection[source])
         self.artifacts["selected"] = selection
         return "\n".join(("```python", output, "```"))
 
-
     def run(self, env, problem):
-        self.artifacts = {name: [] for name in ("calls", "executions", "candidates", "selections", "repairs",
-                                               "public_budget_observations", "can_ask_observations")}
-        self.artifacts.update(config=dict(self.config), policy=dict(self.policy), review=None, actual_qa_count=0,
-            qa=dict(actual_invocations=0, completed_interactions=0, question=None, answer=None, answer_truthy=False))
+        self.artifacts = {
+            name: []
+            for name in (
+                "calls",
+                "executions",
+                "candidates",
+                "selections",
+                "repairs",
+                "public_budget_observations",
+                "can_ask_observations",
+            )
+        }
+        self.artifacts.update(
+            config=dict(self.config),
+            policy=dict(self.policy),
+            review=None,
+            actual_qa_count=0,
+            qa=dict(
+                actual_invocations=0,
+                completed_interactions=0,
+                question=None,
+                answer=None,
+                answer_truthy=False,
+            ),
+        )
         prompt = problem["prompt"]
         entry = problem["entry_point"]
-        self.artifacts.update(visible_problem=dict(prompt=prompt, entry_point=entry),
-            original_prompt=prompt, working_prompt=prompt,
-            prompt_preprocessing=dict(mode="identity", requested_cleaning=self.config["clean_contradictions"]))
+        self.artifacts.update(
+            visible_problem=dict(prompt=prompt, entry_point=entry),
+            original_prompt=prompt,
+            working_prompt=prompt,
+            prompt_preprocessing=dict(
+                mode="identity", requested_cleaning=self.config["clean_contradictions"]
+            ),
+        )
         declared = declared_name(prompt, entry)
         names = [entry] if not declared else [entry, declared]
         examples = parse_examples(prompt, names)
@@ -1620,24 +2065,46 @@ class EvidenceGuidedRepairClarifier(_AlgorithmBase):
         if permission:
             execution = initial["execution"]
             anchor_row = execution["rows"][0] if execution else None
-            wording, check = self.question(env, prompt, entry, initial["anchor"], execution, anchor_row)
+            wording, check = self.question(
+                env, prompt, entry, initial["anchor"], execution, anchor_row
+            )
             if wording:
                 interaction.update(question=wording, actual_invocations=1)
                 returned_answer = env.ask_human(wording)
-                interaction.update(answer=returned_answer, answer_truthy=bool(returned_answer), completed_interactions=1)
+                interaction.update(
+                    answer=returned_answer,
+                    answer_truthy=bool(returned_answer),
+                    completed_interactions=1,
+                )
                 self.artifacts["actual_qa_count"] = 1
         if interaction["answer_truthy"]:
             # Every substantive reply is retained verbatim and compiled before
             # fresh generation; mere assent cannot bypass the evidence compiler.
-            state = self.final_state(env, prompt, entry, declared, examples,
-                interaction["question"], interaction["answer"], check, initial)
-            chosen = self.correct(env, state, prompt, entry, declared, interaction["question"], interaction["answer"])
+            state = self.final_state(
+                env,
+                prompt,
+                entry,
+                declared,
+                examples,
+                interaction["question"],
+                interaction["answer"],
+                check,
+                initial,
+            )
+            chosen = self.correct(
+                env, state, prompt, entry, declared, interaction["question"], interaction["answer"]
+            )
             branch = "post_answer"
         else:
             chosen = initial["anchor"]
             if initial["execution"] and len(initial["drafts"]) > 1:
-                order = [initial["anchor_index"], *[n for n in range(len(initial["drafts"])) if n != initial["anchor_index"]]]
-                position = self.rank(initial["execution"]["rows"], list(range(len(examples))), [], "without_answer")
+                order = [
+                    initial["anchor_index"],
+                    *[n for n in range(len(initial["drafts"])) if n != initial["anchor_index"]],
+                ]
+                position = self.rank(
+                    initial["execution"]["rows"], list(range(len(examples))), [], "without_answer"
+                )
                 chosen = initial["drafts"][order[position]]
             branch = "without_truthy_answer"
         return self.deliver(chosen, entry, branch)
